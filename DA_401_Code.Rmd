@@ -1,0 +1,246 @@
+---
+title: "Mid Semester Project"
+output: html_document
+date: "2022-10-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import libraries and data
+
+```{r}
+library(dplyr)
+require(astsa) #Library for book
+require(xts)
+require(mosaic)
+require(dplyr)
+require(car)
+require(Stat2Data)
+require(dynlm)
+library(nlme)
+require(AER)
+library(forecast)
+require(mgcv)
+library(tseries) # need for Augmented Dickey-Fuller test
+require(lmtest) # need for Durbin Watson test
+require(fBasics) # need for normality tests of residuals
+require(leaps)
+require(urca) # need for ERS test of stationarity
+library(tidyverse)
+library(quantmod)
+library(dynlm)
+library(tseries)
+library(fBasics)
+library(zoo)
+library(lmtest) 
+library(forecast)
+library(rugarch)
+```
+
+```{r}
+amz <- read.csv("AMZN.csv")
+sdate <- as.Date('2017-10-09')
+edate <- as.Date('2022-10-06')
+
+## Pull data from Yahoo Finance
+
+stockvar <- getSymbols(c('AMZN'), src = 'yahoo', from = sdate, to = edate, auto.assign = F)
+stockvar <- na.omit(stockvar)
+```
+
+# Several Exploration Data Analysis
+
+## 
+
+```{r}
+chartSeries(stockvar[,4], theme = 'black', name = c('AMZN')[1])
+```
+The above graph shows the daily Amazon stock price over time starting from Oct 09th, 2017 and extending to Oct 06th, 2022. Some observations we can see about the stock price is an overall increasing trend, but it also inconsistency.  A noticeable increase in around March 2020, due to the Covid-19 pandemic and a stay at home order, there was a large increase in the use of contactless Amazon purchases. This drove the stock price up where it then leveled off at around $180 per share. However, we also see a significant drop in the beginning of this year, when the pandemic ends.
+
+## Fitting a Function of Time
+
+```{r}
+time <- nrow(amz)
+amz['t'] <- 1:time
+mod1 <- lm(Close~t, amz)
+summary(mod1)
+```
+
+On the first look, the function of time to predict the closing price looks pretty good. All the variables are significant. The model explains 65.51% of the variability of the response values. Let's check the condition of it.
+
+```{r}
+plot(mod1, which = 1)
+plot(mod1, which = 2)
+```
+
+There are certainly some problems with the residuals plot, as it seems to have a pattern. The normal qq plot doesn't look normal enough when the points are not in the straight line. Let's try a log-transformation.
+
+```{r}
+mod2 <- lm(log(Close)~t, amz)
+summary(mod2)
+```
+
+At the first sight, the model with log-transformation looks better than the previous one. Let's check the condition.
+
+```{r}
+plot(mod2, which = 1)
+plot(mod2,which = 2)
+```
+
+The log-transformation doesn't seem to solve the problem with the residual plot and the normal qq plot. Let's see a quadratic model.
+
+```{r}
+mod3 <- lm(Close~t+I(t^2), amz)
+summary(mod3)
+plot(mod3, which = 1)
+plot(mod3,which = 2)
+```
+
+Even the quadratic term is not enough for the curve. It is still significant, explaining over 70% the variability of the response variable. It seems like the function of time is underfitting this type of data critically. Let's try other types of model.
+
+# Time Series Modelling
+
+## Decomposing and transformation data
+
+```{r}
+stockvar.ts <- ts(stockvar[,4], start = 2017-10-09, frequency = 120)
+stockvar.de <- decompose(stockvar.ts)
+plot(stockvar.de)
+```
+
+The graph shown above has four sections. The top section is a vertically condensed graph that was shown above. The next graph is a smoothed curve which shows the general trend of the original graph. The third graph shows the seasonal trends in the stock price since the time of year and the quarter that the stock market is at is such a common and important pattern in stock prices. The final graph displays the residual error, which is the variation of the stock price that cannot be immediately determined by the major factors of trend and seasonal variation. It seems that there is a lot of randomness in this data. The seasonal trend seems good, suggesting we don't need a seasonal part in the data.
+
+```{r}
+# TS Plots
+tsplot(amz$Close)
+```
+
+This plot doesn't look stationary.
+
+```{r}
+amzlet <- zoo(amz$Close, as.Date(as.character(amz$Date), format = c("%Y-%m-%d")))
+
+## Take log return on time series 
+amz_ret <- log(amzlet/timeSeries::lag(amzlet, -1))
+
+## remove date to make numeric object
+amz_num <- coredata(amz_ret)
+
+basicStats(amzlet)
+basicStats(amz_ret)
+
+```
+From the statistics of time series of Amazon stock, we observe that the mean value is not zero and the variance is high. This encourages us to take log return of stock price to make it stationary. The reason that we need to use a log return for the time series will be discussed more detailed about the reason for choosing the log return transformation. Let's take a look at the histogram of log returns:
+
+```{r}
+hist(amz_ret, xlab="Daily return of stock prices", prob=TRUE, main="Histogram for daily return of stock prices")
+
+```
+The histogram of the daily return of the stock price looks similar to a normal distribution.
+
+```{r}
+plot(amz_ret, type='l', ylab = "stock price return", main="Plot of 2017-2022 daily Amazon stock price return")
+```
+After taking the log return of the time series, we saw that the plot looks reasonably good. However, a big problem it is having is that the plot does not have a constant variance. We saw a big spike in 2019, 2020 and 2022. To deal with this problem, it is best to use a GARCH model to handle the non-constant volatility. First, let's try to fit an ARIMA model based on the ACF and PACF plots.
+
+## ACF and PACF signal
+
+```{r}
+acf(amz_num)
+pacf(amz_num)
+```
+
+The ACF and PACF doesn't indicate any signals for the ARMA parts. We do actually have several significant correlation, but as we conducted more than 30 tests, this could be due to the randomness alone. Therefore, we don't need any AR or MA part. Let's test the stationary of the data.
+
+```{r}
+adf.test(amz_ret)
+pp.test(amz_ret)
+kpss.test(amz_ret)
+ur.ers(amz_ret)
+```
+
+All the test states the stationary of the time series. Let's jump to modelling part.
+
+## Finding GARCH parameters
+
+```{r}
+## ACF plot for log return squared
+acf(amz_num^2)
+pacf(amz_num^2)
+```
+The statistic showed that the was constant and nearly 0. This means that the log stock price returns are not correlated, and the mean is almost constant. However, the square of log return show high correlation, meaning that the log return has a strong non-linear dependence. From ACF and PACF of the squared log return, we see there are significant spikes at lag 1, motivating us to implement GARCH(1,1).
+
+# Model Fitting
+
+## SARIMA(0,0,0)x(0,0,0)
+
+Since we don't need any AR, MA and seasonal part, a simple SARIMA(0,0,0)x(0,0,0) model should be decent for this task. Let's go ahead and fit this model.
+
+```{r}
+sarima(amz_num, p=0,d=0,q=0, P=0,D=0,Q=0)
+```
+
+The ACF plots and the normal qq plot are great. On the other hand, the residual plot does not look the best honestly. We don't have the constant variance condition, suggesting a need of a GARCH. A note for the model is that the AIC = -4.80149.
+
+## AR(0)-GARCH(1,1) with normally distributed errors
+
+```{r}
+garch11.spec=ugarchspec(variance.model=list(garchOrder=c(1,1)), mean.model=list(armaOrder=c(0,0)))
+garch11.fit=ugarchfit(spec=garch11.spec, data=amz_ret)
+garch11.fit
+```
+The AIC value is -4.9913.
+
+Residuals diagnostics: Ljung’s Box test for white noise behavior in residuals. Since the p-value is larger than 0.05, we fail to reject the null hypothesis, hence there is no evidence of autocorrelation in the residuals. So we can conclude that the residuals behave as white noise.
+
+Seeing the p-value of the ARCH LM test, we fail to reject the null hypothesis. Hence we can conclude that there is no evidence of serial correlation in squared residuals.
+
+From the output for the goodness of fit test, since the p-value < 0.05, we reject the null hypothesis that residuals follows normal distribution
+
+##  ARMA(0,0)-GARCH(1,1) with skewed t-distribution
+
+```{r}
+garch11.skt.spec=ugarchspec(variance.model=list(garchOrder=c(1,1)), mean.model=list(armaOrder=c(0,0)), distribution.model = "sstd")
+#estimate model 
+garch11.skt.fit=ugarchfit(spec=garch11.skt.spec, data=amz_ret)
+garch11.skt.fit
+```
+
+The AIC value is -5.1018.
+
+Residuals diagnostics: Ljung’s Box test for white noise behavior in residuals. Since the p-value is larger than 0.05, we fail to reject the null hypothesis, hence there is no evidence of autocorrelation in the residuals. So we can conclude that the residuals behave as white noise.
+
+Seeing the p-value of the ARCH LM test, we fail to reject the null hypothesis. Hence we can conclude that there is no evidence of serial correlation in squared residuals.
+
+From the output for the goodness of fit test, since the p-value > 0.05, we fail to reject the null hypothesis and hence, this model is a good fit.
+
+## ARMA(0,0)-eGARCH(1,1) with t-distribution
+
+```{r}
+egarch11.t.spec=ugarchspec(variance.model=list(model = "eGARCH", garchOrder=c(1,1)), mean.model=list(armaOrder=c(0,0)), distribution.model = "std")
+#estimate model 
+egarch11.t.fit=ugarchfit(spec=egarch11.t.spec, data=amz_ret)
+egarch11.t.fit
+```
+
+The AIC value is -5.1178.
+
+Residuals diagnostics: Ljung’s Box test for white noise behavior in residuals. Since the p-value is larger than 0.05, we fail to reject the null hypothesis, hence there is no evidence of autocorrelation in the residuals. So we can conclude that the residuals behave as white noise.
+
+Seeing the p-value of the ARCH LM test, we fail to reject the null hypothesis. Hence we can conclude that there is no evidence of serial correlation in squared residuals.
+
+From the output for the goodness of fit test, since the p-value > 0.05, we fail to reject the null hypothesis and hence, this model is a good fit.
+
+# Model Forecasting
+
+I choose model 3 as it has the lowest AIC value and it checked all the condition.
+
+```{r}
+fit_roll <- ugarchfit(egarch11.t.spec, data= na.omit(amz_ret), out.sample = 200)
+garch_fore <- ugarchforecast(fit_roll, n.ahead = 20, n.roll = 50)
+plot(garch_fore, which = "all")
+```
+The prediction is able to catch the volatility and the trends of the time series. However, as in the decomposition section has mentioned, we have a huge random effect in the data, so a linear way might not be enough to forecast anything. In the paper, I will discuss details about results and improvement for future research.
+
