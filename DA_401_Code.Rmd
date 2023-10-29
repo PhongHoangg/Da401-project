@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(dplyr)
-require(astsa) #Library for book
+require(astsa)
 require(xts)
 require(mosaic)
 require(dplyr)
@@ -23,11 +23,11 @@ library(nlme)
 require(AER)
 library(forecast)
 require(mgcv)
-library(tseries) # need for Augmented Dickey-Fuller test
-require(lmtest) # need for Durbin Watson test
-require(fBasics) # need for normality tests of residuals
+library(tseries) 
+require(lmtest)
+require(fBasics) 
 require(leaps)
-require(urca) # need for ERS test of stationarity
+require(urca) 
 library(tidyverse)
 library(quantmod)
 library(dynlm)
